@@ -1,83 +1,73 @@
 import os
+import logging
 from dotenv import load_dotenv
 from passlib.context import CryptContext
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi import Depends, HTTPException, status, APIRouter
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import jwt, JWTError
 from datetime import datetime, timedelta
 from typing import Optional
+from config import settings
 
 load_dotenv()
 
-# Récupére des variables depuis le fichier .env 
-SECRET_KEY = os.getenv("SECRET_KEY")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
-HASHED_PASSWORD = os.getenv("HASHED_PASSWORD")
+router = APIRouter()
 
-# Vérifie la présence des variables d'environnement critiques
-if not SECRET_KEY:
-    raise ValueError("La variable SECRET_KEY n'est pas définie dans le fichier .env.")
-if not HASHED_PASSWORD:
-    raise ValueError("La variable HASHED_PASSWORD n'est pas définie dans le fichier .env.")
-
-# Gestion des mots de passe
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
-# Dépendance OAuth2
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+logger = logging.getLogger("auth")
 
-# Vérifie si le mot de passe est correct
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-
-    return pwd_context.verify(plain_password, hashed_password)
-
-
-# Authentifie un utilisateur
-def authenticate_user(username: str, password: str) -> bool:
-
-    if username != "testuser":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Nom d'utilisateur incorrect",
-        )
-    if not verify_password(password, HASHED_PASSWORD):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Mot de passe incorrect",
-        )
-    return True
-
+users_db = {
+    settings.USERNAME: {
+        "username": settings.USERNAME,
+        "hashed_password": pwd_context.hash(settings.PASSWORD)
+    }
+}
 
 # Crée un token d'accès
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+def create_access_token(data: dict):
 
     to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    expire = datetime.utcnow() + (timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
 
+def decode_token(token: str):
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        username = payload.get("sub")
+        if username is None:
+            raise JWTError
+        logger.info("Token décodé avec succès.")
+        return username
+    except JWTError:
+        logger.warning("Échec du décodage du token.")
+        return None
 
 # Dépendance pour obtenir l'utilisateur actuel
-async def get_current_user(token: str = Depends(oauth2_scheme)):
-
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Impossible de valider les informations d'identification",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        # Décodage du token
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
-            raise credentials_exception
-    except JWTError:
-        raise credentials_exception
-
-    # Vérifie que l'utilisateur est valide
-    if username != "testuser":
-        raise credentials_exception
-    
+def get_current_user(token: str = Depends(oauth2_scheme)):
+    username = decode_token(token)
+    if username is None:
+        logger.warning("Pas d'authentification de l'utilisateur.")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return {"username": username}
+
+
+@router.post("/login")
+def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    user = users_db.get(form_data.username)
+    if not user or not pwd_context.verify(form_data.password, user["hashed_password"]):
+        logger.warning("Tentative de connexion échouée pour l'utilisateur : %s", form_data.username)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid username or password"
+        )
+    access_token = create_access_token(data={"sub": user["username"]})
+    logger.info("Connexion réussie pour l'utilisateur : %s", user["username"])
+    return {"access_token": access_token, "token_type": "bearer"}

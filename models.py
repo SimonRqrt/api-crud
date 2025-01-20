@@ -12,7 +12,7 @@ class ProductCategory(SQLModel, table=True):
     Name: str = Field(..., max_length=255)
     ParentProductCategoryID: Optional[int] = Field(default=None, foreign_key="SalesLT.ProductCategory.ProductCategoryID")
     rowguid: uuid.UUID = Field(default_factory=uuid.uuid4)
-    ModifiedDate: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    ModifiedDate: datetime = Field(default_factory=datetime)
     Products: List["Product"] = Relationship(back_populates="Category")
 
 
@@ -25,7 +25,7 @@ class ProductModel(SQLModel, table=True):
     Name: str = Field(..., max_length=255)
     CatalogDescription: Optional[str] = None
     rowguid: uuid.UUID = Field(default_factory=uuid.uuid4)
-    ModifiedDate: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    ModifiedDate: datetime = Field(default_factory=datetime)
     Products: List["Product"] = Relationship(back_populates="Model")
 
 
@@ -83,7 +83,7 @@ class ProductCreate(SQLModel):
     Weight: Optional[float] = None
     ProductCategoryID: Optional[int] = None
     ProductModelID: Optional[int] = None
-    SellStartDate: datetime = Field(default_factory=datetime)
+    SellStartDate: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 # Modèle pour la mise à jour des produits
@@ -104,3 +104,12 @@ class ProductUpdate(SQLModel):
     SellStartDate: Optional[datetime] = None
     SellEndDate: Optional[datetime] = None
     DiscontinuedDate: Optional[datetime] = None
+
+
+class User(SQLModel, table=True):
+    __tablename__ = "User"
+    id: int = Field(primary_key=True)
+    username: str = Field(..., unique=True, max_length=50)
+    hashed_password: str = Field(...)
+    is_active: bool = Field(default=True)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
